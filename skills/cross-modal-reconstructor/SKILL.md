@@ -1,3 +1,12 @@
+---
+name: Cross Modal Indexer
+description: Convert data from one modality into another using
+vapor-idx as the indexed bridge
+version: 2.0.0
+tools:
+  - computer_use
+---
+
 # Cross-Modal Reconstructor Skill
 
 ## Purpose
