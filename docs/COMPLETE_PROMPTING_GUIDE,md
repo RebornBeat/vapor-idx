@@ -1,0 +1,760 @@
+# VAPOR-IDX SKILL SYSTEM — COMPLETE PROMPTING GUIDE
+## How to Trigger Every Skill, For Every Scenario, With Maximum Precision
+
+---
+
+## PREFACE: WHY EXPLICIT PROMPTS MATTER
+
+The skill system works by Claude reading the relevant SKILL.md before executing any
+image task. Skills are NOT automatically loaded — Claude must be directed to read them.
+This guide provides copy-paste-ready prompt templates that:
+1. Specify which skills to read and in what order
+2. Describe the exact inputs and outputs expected
+3. Set the physical constraints that govern all operations
+4. Define the evaluation dimensions the output will be scored against
+
+Each template is fully generalized — substitute your own inputs where indicated by
+`[BRACKETS]`.
+
+---
+
+## SKILL DIRECTORY — WHAT EXISTS AND WHAT IT DOES
+
+| Skill | Path | Triggers When |
+|---|---|---|
+| **scene-analyzer** | `/mnt/skills/user/scene-analyzer/SKILL.md` | Any background environment image is provided |
+| **pixel-analyzer** | `/mnt/skills/user/pixel-analyzer/SKILL.md` | Any image analysis, extraction, or compositing task |
+| **skeleton-2d** | `/mnt/skills/user/skeleton-2d/SKILL.md` | Subject needs pose change (riding, sitting, running) |
+| **lighting-engine** | `/mnt/skills/user/lighting-engine/SKILL.md` | Subject needs re-lighting to match new environment |
+| **material-engine** | `/mnt/skills/user/material-engine/SKILL.md` | Surface material realism, footprints, ripples, identity |
+| **color-reconstructor** | `/mnt/skills/user/color-reconstructor/SKILL.md` | Color transformation, style unification |
+| **environment-modifier** | `/mnt/skills/user/environment-modifier/SKILL.md` | Modifying environment elements (waves, weather, time) |
+| **cad-to-photo** | `/mnt/skills/user/cad-to-photo/SKILL.md` | Placing 3D CAD/mesh into a real photo |
+| **mesh-analyzer** | `/mnt/skills/user/mesh-analyzer/SKILL.md` | Any 3D mesh file (OBJ/STL/GLTF) input |
+| **design-indexer** | `/mnt/skills/user/design-indexer/SKILL.md` | HTML or SVG analysis/conversion |
+| **cross-modal-reconstructor** | `/mnt/skills/user/cross-modal-reconstructor/SKILL.md` | Converting between modalities |
+
+---
+
+## TEMPLATE 1 — SUBJECT INTO ENVIRONMENT (Core Compositing)
+
+**Scenario:** Place any photographed subject (person, animal, object) into any environment.
+**Skills:** scene-analyzer + pixel-analyzer + lighting-engine + material-engine
+
+```
+Read the following skills completely before starting, in this order:
+1. /mnt/skills/user/scene-analyzer/SKILL.md
+2. /mnt/skills/user/pixel-analyzer/SKILL.md
+3. /mnt/skills/user/lighting-engine/SKILL.md
+4. /mnt/skills/user/material-engine/SKILL.md
+
+TASK: Composite SUBJECT_IMAGE into ENVIRONMENT_IMAGE with full physical realism.
+
+INPUTS:
+  SUBJECT_IMAGE:   [path or description of subject image]
+  ENVIRONMENT_IMAGE: [path or description of environment image]
+  SUBJECT_TYPE:    [person | animal | object | vehicle]
+  IMAGE_TYPE:      [outdoor_beach | outdoor_nature | indoor_room | studio | urban]
+
+REQUIRED PIPELINE (execute all phases, use vapor-idx for every step):
+
+PHASE 1 — SCENE ANALYSIS (run FIRST, mandatory):
+  - Run analyze_scene() on ENVIRONMENT_IMAGE
+  - Extract: horizon_y, all boundaries, full 12-variable lighting model,
+    zone masks (sky/water/sand or wall/floor/ceiling), material properties per zone
+  - Store scene_props for use in all subsequent phases
+
+PHASE 2 — SUBJECT EXTRACTION:
+  - Index SUBJECT_IMAGE pixels into vapor instance 1
+  - Build full ADJACENT_TO relationships (use relate_many for performance)
+  - Compute Sobel edges
+  - Flood-fill cluster detection (colour_tolerance=42, min_size=step*step*4)
+  - Build ALL cluster relationships: ADJACENT_TO, PART_OF, CONTAINS,
+    SPATIALLY_ABOVE, SPATIALLY_LEFT_OF, SYMMETRICAL_WITH
+  - Run 5x semantic labeling with image_type=[SUBJECT_TYPE]
+  - Run infer_objects() for composite object detection
+
+PHASE 3 — BACKGROUND REMOVAL:
+  - Use isolate_foreground_halosafe() — BFS from corners with subject-boundary guard
+    (NO pixels adjacent to confirmed subject clusters may be removed)
+  - Run classify_motion_artifacts() — preserve spray/blur/splash adjacent to subject
+  - Report: fg_pixels, bg_pixels_removed, motion_artifacts_preserved
+
+PHASE 4 — PERSPECTIVE + SCALE:
+  - Use compute_perspective_scale(horizon_y, feet_y_target, canvas_h)
+  - Compute target_h = scale_f * (BH - horizon_y) * 1.1
+  - Use detect_subject_anchor([SUBJECT_TYPE]) for mounting point (semantic, not geometric %)
+
+PHASE 5 — RE-LIGHTING:
+  - Apply apply_color_temperature() — match scene color_temp_kelvin
+  - Apply apply_directional_diffuse() using scene sun + ambient colors
+  - Apply apply_specular_per_cluster() per material class
+  - Apply apply_sss() for organic surfaces (skin, fur, leaf)
+
+PHASE 6 — COMPOSITE:
+  - Scale subject mask to computed target_h
+  - Place at anchor_x, feet_y_target with cx_frac=[0.45-0.55]
+  - Feather boundary (4px multi-pass)
+
+PHASE 7 — PHYSICAL CONTACT EFFECTS:
+  - generate_contact_zone() — AO ring + directional shadow at feet/hooves/base
+  - generate_ground_reflection() if surface is wet/reflective
+  - render_horizon_glow() if warm_strength > 0.15
+  - apply_depth_fog() on background sky zone
+
+PHASE 8 — MATERIAL RECONSTRUCTION:
+  - apply_material_by_class() on background surface clusters
+  - apply_wet_surface_effect() on wet_sand or water clusters
+  - Optional: generate_footprint_displacement() on soft surfaces
+
+PHASE 9 — FINAL OUTPUT:
+  - Reconstruct PNG from composite canvas
+  - Report all vapor-idx stats from both instances
+
+CONSTRAINTS (all mandatory):
+  - All operations at cluster or sub-cluster level
+  - No full-image filters (except change_time_of_day which is permitted)
+  - No direct alpha compositing — all placements go through paint_mask_onto_canvas()
+  - Spatial relationships must remain consistent after transformation
+  - vapor.get_relationships() — NOT vapor.getRelationships()
+  - Direction always explicit: "both" for undirected, "outgoing"/"incoming" for directed
+
+EVALUATION (score 1-10 on each):
+  - Identity preservation
+  - Lighting accuracy
+  - Material realism
+  - Edge integrity
+  - Physical consistency
+  - Style consistency
+  - Scale plausibility
+  - Pipeline completeness
+
+Report all 8 scores with brief justification per dimension.
+```
+
+---
+
+## TEMPLATE 2 — COLOR TRANSFORMATION
+
+**Scenario:** Change a subject's color (hue swap, color remap).
+**Skills:** pixel-analyzer + color-reconstructor
+
+```
+Read the following skills completely before starting:
+1. /mnt/skills/user/pixel-analyzer/SKILL.md
+2. /mnt/skills/user/color-reconstructor/SKILL.md
+
+TASK: Transform the color of [SUBJECT_TYPE] in SUBJECT_IMAGE from [SOURCE_COLOR] to [TARGET_COLOR].
+
+INPUTS:
+  SUBJECT_IMAGE: [path]
+  SOURCE_COLOR:  [e.g. green, hue range 75-165°]
+  TARGET_COLOR:  [e.g. red-orange, hue 18°]
+  SUBJECT_LABELS: [e.g. frog_body_green, frog_body_dark, frog_belly]
+  OUTLINE_LABELS: [e.g. contour_edge, dark_blob]
+
+PIPELINE:
+
+STEP 1 — Full pixel-analyzer pipeline on SUBJECT_IMAGE:
+  - Index pixels, Sobel, cluster detection, cluster relationships, 5x semantic labeling
+  - Use image_type=[SUBJECT_TYPE]
+
+STEP 2 — Measure source distributions BEFORE swapping:
+  - For each cluster matching SUBJECT_LABELS:
+    call measure_cluster_color_distribution(vapor, cluster_record_id)
+  - Record: hue mean, hue std, saturation mean, value mean per cluster
+
+STEP 3 — Build per-cluster color mappings:
+  - For each subject cluster:
+    call build_color_mapping(source_distribution, target_hue=[TARGET_HUE_DEG],
+                             preserve_luminance=True)
+  - Saturation scale = measure-based (do NOT guess)
+  - Per-pixel hue variation within clusters must be preserved
+    (a dark spot stays relatively dark in the new hue family)
+
+STEP 4 — Apply color mappings:
+  - call apply_color_mapping_to_cluster() per cluster
+  - source_hue_range=[SOURCE_HUE_MIN, SOURCE_HUE_MAX] to restrict scope
+  - luminance_preserve_strength=0.95
+
+STEP 5 — Correct outline clusters:
+  - call correct_outline_after_swap(vapor,
+      swapped_body_labels=SUBJECT_LABELS,
+      outline_labels=OUTLINE_LABELS,
+      target_hue=TARGET_HUE_DEG,
+      saturation_scale=0.60,
+      value_darken=0.82)
+
+STEP 6 — Reconstruct PNG
+  - Report: clusters swapped, pixels swapped, outline pixels corrected,
+    original hue ranges, target hue
+
+CONSTRAINTS:
+  - No single global HSV hue shift — per-cluster distribution mapping only
+  - Luminance structure must be preserved per pixel
+  - Outline clusters must be corrected after body swap
+```
+
+---
+
+## TEMPLATE 3 — POSE DEFORMATION (Riding, Sitting, Running)
+
+**Scenario:** Change a person/animal's body pose.
+**Skills:** pixel-analyzer + skeleton-2d
+
+```
+Read the following skills completely before starting:
+1. /mnt/skills/user/pixel-analyzer/SKILL.md
+2. /mnt/skills/user/skeleton-2d/SKILL.md
+
+TASK: Apply [POSE_NAME] pose to SUBJECT_IMAGE before compositing.
+
+INPUTS:
+  SUBJECT_IMAGE: [path]
+  POSE_NAME:     [RIDING | SITTING | RUNNING | STANDING | CUSTOM]
+  SUBJECT_TYPE:  [person | animal]
+
+PIPELINE:
+
+STEP 1 — Full pixel-analyzer pipeline on SUBJECT_IMAGE (through phase 6):
+  - Must complete: index, Sobel, clusters, relationships, 5x semantic labeling
+  - Use make_vapor_schema(include_skeleton=True)
+
+STEP 2 — Skeleton detection:
+  - detect_joints_from_clusters(vapor, cluster_ids, image_h=SH)
+  - Traverse SPATIALLY_ABOVE/BELOW cluster chains to locate joint centroids
+  - Must find: head, neck, torso, shoulders, elbows, wrists, hips, knees, ankles
+
+STEP 3 — Build skeleton graph:
+  - build_skeleton_graph(vapor, joint_positions)
+  - Creates Joint records with PARENT_OF/CHILD_OF chains
+  - Creates Bone records with FROM_JOINT/TO_JOINT links
+
+STEP 4 — 5x Validation:
+  - validate_skeleton_5x(vapor, joint_ids, joint_positions)
+  - Check anatomical distance ratios against ANATOMICAL_RATIOS table
+  - If plausibility < 0.3: report failure, use original pose
+
+STEP 5 — Apply pose:
+  - If POSE_NAME == RIDING:   use POSE_RIDING angles
+  - If POSE_NAME == SITTING:  use POSE_SITTING angles
+  - If POSE_NAME == RUNNING:  use POSE_RUNNING angles
+  - apply_pose_transform(fg_mask, joint_positions, target_pose, joint_ids, vapor)
+  - Processing order: root (torso) → outward (distal joints)
+  - All pixels OWNED_BY affected joints rotate around proximal joint pivot
+
+STEP 6 — Reconstruct posed mask (ready for compositing)
+
+REPORT: joints detected, bone count, plausibility score, validation issues,
+        pose name applied, pixel count before/after, any joints not found
+```
+
+---
+
+## TEMPLATE 4 — ENVIRONMENT MODIFICATION
+
+**Scenario:** Modify an element within an existing environment photo.
+**Skills:** scene-analyzer + environment-modifier + pixel-analyzer
+
+```
+Read the following skills completely before starting:
+1. /mnt/skills/user/scene-analyzer/SKILL.md
+2. /mnt/skills/user/environment-modifier/SKILL.md
+3. /mnt/skills/user/pixel-analyzer/SKILL.md
+
+TASK: Apply [MODIFICATION] to ENVIRONMENT_IMAGE.
+
+INPUTS:
+  ENVIRONMENT_IMAGE: [path]
+  MODIFICATION:      [amplify_waves | tsunami | add_rain | add_snow | add_storm |
+                       change_time | add_particles | add_fog | add_sand_kick]
+  PARAMETERS:
+    factor:           [for waves, default 3.0, tsunami = 8.0]
+    intensity:        [for rain/snow/storm, 0.0-1.0]
+    target_time:      [golden_hour | midday | blue_hour | night | overcast]
+    particle_type:    [sand | snow | ember | foam | dust | leaves | rain]
+    density:          [for particles, 0.0-1.0]
+
+PIPELINE:
+
+STEP 1 — Scene analysis:
+  - analyze_scene(ENVIRONMENT_IMAGE) → scene_data
+  - Extract: horizon_y, boundaries, scene_type, lighting model
+
+STEP 2 — Pixel analysis (if modification needs cluster data):
+  - For wave/particle modifications: run pixel-analyzer on ENVIRONMENT_IMAGE
+  - Index pixels, compute Sobel, detect clusters, 5x semantic labeling
+  - Label water_zone, sky_zone, sand_zone clusters
+
+STEP 3 — Apply modification:
+  - call apply_environment_modification(canvas, vapor, BW, BH,
+                                        scene_props, modification, params)
+
+STEP 4 — For wave modifications:
+  - Extract wave profile from vapor cluster data (NOT geometric center)
+  - Scale by factor using Gaussian-smoothed profile
+  - Add secondary wave modulation
+  - Regenerate water pixels with depth gradient coloring
+  - Add foam at crests proportional to wave height
+  - Cast shadow if factor > 4.0
+
+STEP 5 — For time-of-day:
+  - Apply per-pixel color temperature shift (sky zone separately from ground zone)
+  - Update scene_props with new lighting values
+
+STEP 6 — For particles:
+  - Use depth-based size scaling (larger at bottom = closer)
+  - Wind drift proportional to particle size
+  - No per-pixel random noise — use procedural generation
+
+REPORT: modification applied, pixels modified, zone affected,
+        wave max height (if applicable), new scene_props (if time changed)
+```
+
+---
+
+## TEMPLATE 5 — CAD MODEL INTO REAL PHOTO
+
+**Scenario:** Place a 3D CAD/mesh model into a real photograph.
+**Skills:** scene-analyzer + mesh-analyzer + cad-to-photo + pixel-analyzer
+
+```
+Read the following skills completely before starting:
+1. /mnt/skills/user/scene-analyzer/SKILL.md
+2. /mnt/skills/user/mesh-analyzer/SKILL.md
+3. /mnt/skills/user/cad-to-photo/SKILL.md
+4. /mnt/skills/user/pixel-analyzer/SKILL.md
+
+TASK: Place MESH_FILE into BACKGROUND_PHOTO with photorealistic integration.
+
+INPUTS:
+  MESH_FILE:        [path to .obj / .stl / .gltf]
+  BACKGROUND_PHOTO: [path to .png]
+  SUBJECT_H_M:      [real-world height in meters, e.g. 0.3 for a small product]
+  PLACE_CX_FRAC:    [horizontal center, 0.0-1.0, default 0.5]
+  PLACE_DEPTH_M:    [distance from camera in meters, default 3.0]
+
+PIPELINE:
+
+STEP 1 — Scene analysis (FIRST):
+  - analyze_scene(BACKGROUND_PHOTO)
+  - Extract: horizon_y, lighting model, perspective structure
+
+STEP 2 — Vanishing point detection:
+  - detect_vanishing_points(bg_pixels, BW, BH, horizon_y)
+  - calibrate_virtual_camera(vps, BW, BH, subject_h_m=SUBJECT_H_M)
+
+STEP 3 — Mesh loading + indexing:
+  - load_mesh(MESH_FILE) → geometry dict
+  - index_mesh(mesh_vapor, geometry) → vertex_ids, face_ids, mat_ids
+  - compute_geometry_5x(mesh_vapor, vertex_ids, face_ids)
+  - compute_face_material_properties(mesh_vapor, face_ids)
+  - detect_material_zones(mesh_vapor, face_ids)
+
+STEP 4 — Projection + rasterization:
+  - project_mesh_to_screen(mesh_vapor, camera_params) → projection dict
+  - rasterize_faces(mesh_vapor, projection, camera_params, BW, BH)
+    → sorted face list (back-to-front painter's algorithm)
+
+STEP 5 — PBR rendering into background:
+  - Shadow first: add_mesh_shadow(canvas, rasterized_faces, BW, BH, scene_props, ground_y)
+  - Faces: render_mesh_into_scene(canvas, rasterized, mesh_vapor, mat_ids,
+                                   scene_props, camera_params, BW, BH)
+    - synthesize_face_color() per face: Lambertian diffuse + Phong specular + ambient
+    - Apply scene sun + ambient colors from scene_props
+  - Hard edges: render_hard_edges(canvas, mesh_vapor, projection, BW, BH, scene_props)
+
+STEP 6 — Output PNG
+
+REPORT: mesh vertex/face count, projected vertex count, rendered faces,
+        pixels written, camera parameters inferred, shadow applied
+```
+
+---
+
+## TEMPLATE 6 — STYLE UNIFICATION (Cartoon + Photographic)
+
+**Scenario:** Subject is stylized/cartoon; environment is photographic. Unify styles.
+**Skills:** pixel-analyzer + color-reconstructor
+
+```
+Read the following skills completely before starting:
+1. /mnt/skills/user/pixel-analyzer/SKILL.md
+2. /mnt/skills/user/color-reconstructor/SKILL.md
+
+TASK: Unify the style of [STYLIZED_SUBJECT] to match [PHOTOGRAPHIC_ENVIRONMENT].
+
+PIPELINE:
+
+STEP 1 — Measure style of subject:
+  - After pixel-analyzer pipeline on subject:
+  - measure_style_characteristics(vapor) → style_profile
+  - Determine if style is "photorealistic", "cartoon", or "semi_realistic"
+
+STEP 2 — Measure style of environment (from background vapor instance):
+  - measure_style_characteristics(bg_vapor) → env_style_profile
+
+STEP 3 — If styles differ:
+  - unify_style_toward_photorealistic(vapor, stylized_cluster_labels=[...])
+  - Reduces over-saturation (avg_saturation > 0.75 → target 0.60)
+  - Adds micro-texture via fBm noise to flat-fill regions
+  - Do NOT apply to background clusters
+
+STEP 4 — Continue with compositing pipeline after style unification
+
+REPORT: style scores before and after, pixels modified, saturation reduction applied
+```
+
+---
+
+## TEMPLATE 7 — IDENTITY PRESERVATION (Multiple Source Images)
+
+**Scenario:** 2-3 photos of the same person; place that same person in an environment.
+**Skills:** pixel-analyzer + material-engine + lighting-engine
+
+```
+Read the following skills completely before starting:
+1. /mnt/skills/user/pixel-analyzer/SKILL.md
+2. /mnt/skills/user/material-engine/SKILL.md
+3. /mnt/skills/user/lighting-engine/SKILL.md
+
+TASK: Reconstruct the SAME PERSON from SUBJECT_IMAGES into ENVIRONMENT_IMAGE.
+      Identity must be preserved — do NOT blend, average, or hallucinate features.
+
+INPUTS:
+  SUBJECT_IMAGES: [[path1], [path2], [optional path3]] — same person, different angles
+  ENVIRONMENT_IMAGE: [path]
+
+PIPELINE:
+
+STEP 1 — Lock identity keypoints from source images:
+  For each source image:
+  - Run pixel-analyzer pipeline → find face clusters (large_skin_oval)
+  - call lock_identity_keypoints(vapor, face_cluster_ids, identity_name="subject")
+  - Store: face_width, face_height, face_aspect, eye_distance, eye_to_face_w_ratio
+
+STEP 2 — Select best source image for compositing:
+  - Choose image with clearest view of face and most forward-facing orientation
+  - Run full extraction pipeline on selected image
+
+STEP 3 — Standard compositing pipeline (Template 1)
+
+STEP 4 — Identity verification after compositing:
+  - Run pixel-analyzer on OUTPUT to find face in composite
+  - lock_identity_keypoints on composite face → measured_keypoints
+  - verify_identity_preserved(measured_keypoints, reference_keypoints, tolerance=0.20)
+  - Report: score, issues, specific ratio violations
+
+STEP 5 — Identity evaluation:
+  - Score: are eye spacing ratios preserved? (±20% tolerance)
+  - Score: is face aspect ratio preserved?
+  - Score: are overall proportions consistent?
+
+CONSTRAINTS:
+  - Do NOT guess face features — use only extracted cluster data
+  - Do NOT average multiple face images together
+  - Identity score must be included in evaluation report
+```
+
+---
+
+## TEMPLATE 8 — HTML/SVG ANALYSIS AND CONVERSION
+
+**Scenario:** Analyze a design file or convert between formats.
+**Skills:** design-indexer
+
+```
+Read the following skill completely before starting:
+/mnt/skills/user/design-indexer/SKILL.md
+
+TASK: [Analyze this SVG layout | Convert SVG to CSS | Detect overlapping elements |
+       Find all clickable elements | Convert HTML to SVG]
+
+INPUTS:
+  SOURCE_FILE:    [path to .svg or .html]
+  VIEWPORT_W:    [viewport width in px, default 1920]
+  VIEWPORT_H:    [viewport height in px, default 1080]
+
+PIPELINE:
+
+For SVG input:
+  - index_svg(vapor, svg_text, viewport_w=VIEWPORT_W, viewport_h=VIEWPORT_H)
+
+For HTML input:
+  - index_html(vapor, html_text, viewport_w=VIEWPORT_W, viewport_h=VIEWPORT_H)
+
+Then:
+  - build_spatial_relationships(vapor)
+  - validate_layout_5x(vapor) → report containment violations + overlaps
+
+Queries to run (select relevant):
+  - All clickable elements: FieldFilter("is_clickable","eq",True)
+  - Large elements: FieldFilter("area","gt",10000)
+  - Deep nesting: FieldFilter("depth","gt",5)
+  - Overlapping pairs: get_relationships(id,"OVERLAPS_WITH","both")
+  - Containment tree: traverse(TraversalOptions(from_id=root,"CONTAINS","outgoing",depth=8))
+
+Reconstruct:
+  - reconstruct_css(vapor) → save layout.css
+  - reconstruct_svg(vapor, vw, vh) → save layout.svg
+
+REPORT: total elements, depth distribution, colour palette, clickable count,
+        violation count by type
+```
+
+---
+
+## TEMPLATE 9 — 3D MESH ANALYSIS
+
+**Scenario:** Analyze any OBJ/STL/GLTF mesh file.
+**Skills:** mesh-analyzer
+
+```
+Read the following skill completely before starting:
+/mnt/skills/user/mesh-analyzer/SKILL.md
+
+TASK: Analyze MESH_FILE and reconstruct as Blender Python + OBJ.
+
+INPUTS:
+  MESH_FILE: [path to .obj / .stl / .gltf]
+
+PIPELINE:
+  - load_mesh(MESH_FILE)
+  - index_mesh(vapor, geometry) → vertex_ids, face_ids, mat_ids
+  - compute_geometry_5x(vapor, vertex_ids, face_ids)
+  - compute_face_material_properties(vapor, face_ids)
+  - detect_material_zones(vapor, face_ids)
+  - find_connected_components(vapor, vertex_ids)
+  - compute_bounding_box(vapor)
+
+Queries:
+  - Boundary edges (open mesh): FieldFilter("is_boundary","eq",True)
+  - Crease edges (>60°): FieldFilter("is_crease","eq",True)
+  - High curvature vertices: FieldFilter("curvature","gt",0.1)
+  - Dominant material: order_by=("face_count","desc"), limit=1
+
+Reconstruct:
+  - reconstruct_blender(vapor, "ImportedMesh") → save reconstruct.py
+  - reconstruct_obj(vapor) → save output.obj
+
+REPORT: vertex/face/edge counts, component count, bounding box,
+        boundary edge count, crease count, material zone count,
+        roughness class distribution
+```
+
+---
+
+## TEMPLATE 10 — FULL COMPOSITE WITH POSE + LIGHTING + MATERIALS
+
+**Scenario:** Maximum quality composite — all skills engaged.
+**Skills:** ALL image skills
+
+```
+Read the following skills completely before starting, in this exact order:
+1. /mnt/skills/user/scene-analyzer/SKILL.md
+2. /mnt/skills/user/pixel-analyzer/SKILL.md
+3. /mnt/skills/user/skeleton-2d/SKILL.md
+4. /mnt/skills/user/lighting-engine/SKILL.md
+5. /mnt/skills/user/material-engine/SKILL.md
+6. /mnt/skills/user/color-reconstructor/SKILL.md
+
+TASK: Maximum-quality composite of SUBJECT_IMAGE into ENVIRONMENT_IMAGE.
+      Include pose adjustment, full lighting match, material reconstruction,
+      identity preservation, and physical ground interaction.
+
+INPUTS:
+  SUBJECT_IMAGE:     [path]
+  ENVIRONMENT_IMAGE: [path]
+  TARGET_POSE:       [RIDING | SITTING | STANDING | RUNNING | none]
+  SUBJECT_TYPE:      [person | horse | frog | animal | object]
+  IMAGE_TYPE:        [outdoor_beach | outdoor_nature | indoor_room | other]
+  FEET_Y_FRAC:       [where subject base lands on canvas, default 0.88]
+  CENTER_X_FRAC:     [horizontal center, default 0.52]
+
+RUN THE FULL 11-PHASE PIPELINE:
+  Phase 1:  Index all pixels with full ADJACENT_TO (use relate_many)
+  Phase 2:  Sobel edges
+  Phase 3:  Flood-fill clusters
+  Phase 4:  All cluster relationships (ADJACENT_TO, PART_OF, CONTAINS,
+             SPATIALLY_ABOVE, SPATIALLY_LEFT_OF, SYMMETRICAL_WITH)
+  Phase 5:  5x semantic labeling + infer_objects
+  Phase 6:  Halo-free background removal + motion artifact preservation
+  Phase 7a: If TARGET_POSE != none:
+             - detect_joints_from_clusters
+             - build_skeleton_graph
+             - validate_skeleton_5x
+             - apply_pose_transform using TARGET_POSE constants
+  Phase 7b: Scene analysis (PARALLEL vapor instance on ENVIRONMENT_IMAGE):
+             - detect_structural_boundary → horizon_y
+             - segment_environment_zones
+             - extract_full_lighting_model (12 variables)
+             - characterize_material_zones
+  Phase 8:  Perspective scale + subject anchor detection
+  Phase 9:  Full re-lighting pipeline:
+             - apply_color_temperature (source→target temp)
+             - apply_directional_diffuse
+             - apply_specular_per_cluster (17 material classes)
+             - apply_sss for organic surfaces
+  Phase 10: Composite with physical interactions:
+             - paint_mask_onto_canvas (4px feather)
+             - generate_contact_zone (AO + shadow)
+             - generate_ground_reflection (if wet/reflective surface)
+             - render_horizon_glow
+             - apply_depth_fog
+  Phase 11: Material reconstruction + final output:
+             - apply_material_by_class on all background zones
+             - generate_footprint_displacement (if soft surface)
+             - generate_water_ripples from cluster boundary (if water)
+
+EVALUATION — Score all 8 dimensions:
+  1. Identity preservation (1-10)
+  2. Lighting accuracy (1-10)
+  3. Material realism (1-10)
+  4. Edge integrity (1-10)
+  5. Physical consistency (1-10)
+  6. Style consistency (1-10)
+  7. Scale plausibility (1-10)
+  8. Pipeline completeness (1-10)
+
+Report all vapor-idx stats from all instances:
+  - Pixel count, adjacency relationships, cluster count per instance
+  - Label distribution (top 15 per image)
+  - Background removal stats
+  - Skeleton joints detected (if pose applied)
+  - All 12 scene lighting values
+  - Placement info (scale, position, feather pixels)
+  - Motion artifacts preserved
+  - Contact zone pixel count
+  - Total pipeline time
+```
+
+---
+
+## PART 2: SCENE-SPECIFIC MODIFIERS
+
+Add these snippets to any template when the environment has specific characteristics.
+
+### For Beach/Ocean Environments
+```
+SCENE-SPECIFIC ADDITIONS:
+- Horizon line is at ~35-45% from top of image
+- Water zone: below horizon in middle horizontal band (blue-dominant)
+- Wet sand zone: below water, slightly darker (60-75% from top)
+- Dry sand zone: bottom 25% of canvas
+- Apply procedural_sand_texture() to sand zones after subject placement
+- If sunset: warm_strength > 0.3, render_horizon_glow() is mandatory
+- Apply apply_dry_to_wet_gradient() from water line to dry sand zone
+```
+
+### For Indoor/Studio Environments
+```
+SCENE-SPECIFIC ADDITIONS:
+- scene_type = "indoor_room"
+- Ceiling/wall junction at ~15-20% from top
+- Wall/floor junction at ~70-80% from top
+- Light often comes from windows (soft, directional)
+- Shadow_softness typically 0.6-0.8 (diffuse indoor light)
+- No horizon glow or depth fog for indoor scenes
+- Contact zone = floor indentation for standing subjects
+```
+
+### For Water/Lily Pad Environments
+```
+SCENE-SPECIFIC ADDITIONS:
+- Use extract_segmented_region(vapor, ["lily_pad"], pond_pixels, PW, PH)
+  to get REAL lily pad pixels (not procedural)
+- compute_biological_scale("frog", "lily_pad", pad_pixel_count) for size
+- generate_water_ripples from extract_pad_boundary_for_ripples(vapor)
+  (NOT from geometric center)
+- Contact zone = lily_pad type (slight darkening, no raised rim)
+- generate_ground_reflection() for frog in water
+- apply_sss() for frog skin mandatory
+```
+
+---
+
+## PART 3: THE UNIVERSAL CONSTRAINT BLOCK
+
+Add this to any prompt when you want strict physical accuracy:
+
+```
+UNIVERSAL CONSTRAINTS (all mandatory — no exceptions):
+
+OPERATIONS:
+  - All modifications at cluster or sub-cluster level only
+  - No full-image filters (exception: change_time_of_day which is permitted)
+  - No direct alpha compositing without physical reconstruction
+  - No global color grading — per-cluster only
+  - No blur applied to entire canvas — per-cluster depth-of-field only
+
+API:
+  - vapor.get_relationships() — NEVER vapor.getRelationships()
+  - Direction always explicit: "both" for undirected, "outgoing"/"incoming" for directed
+  - Use relate_many() for all batch relationship creation
+  - Use update_where() for all batch pixel updates in same cluster
+
+SCALE:
+  - Scale MUST come from compute_perspective_scale(horizon_y, feet_y, canvas_h)
+  - Subject anchor MUST come from detect_subject_anchor() — NOT fixed percentage
+  - Biological scale MUST come from compute_biological_scale() lookup table
+
+COLOR:
+  - No single global HSV hue shift — per-cluster distribution mapping
+  - Luminance structure preserved at luminance_preserve_strength=0.95
+  - Outline clusters ALWAYS corrected after any body color swap
+
+PHYSICAL:
+  - Contact zone (AO + shadow) required for ANY subject touching any surface
+  - Shadow direction MUST match scene light_direction
+  - Ground reflection required if surface has reflectivity > 0.4
+  - Motion artifacts MUST be classified and preserved before background removal
+
+REPORTING:
+  - All vapor-idx stats reported from all instances
+  - All 12 lighting variables reported
+  - Evaluation scores required on all 8 dimensions
+```
+
+---
+
+## PART 4: EVALUATION SCORING GUIDE
+
+When asking Claude to evaluate output, reference these exact definitions:
+
+```
+REQUEST FOR EVALUATION:
+
+Score this composite on all 8 dimensions (1-10 each) with brief justification:
+
+1. IDENTITY PRESERVATION
+   1=unrecognizable | 5=same species/type but wrong individual | 10=same individual
+   Measure: face keypoint ratios preserved (±20%); proportions match source
+
+2. LIGHTING ACCURACY
+   1=wrong direction/color | 5=rough match | 10=shadows + highlights + color temp all match
+   Measure: shadow angle, sun-color highlight on surfaces, ambient fill color
+
+3. MATERIAL REALISM
+   1=flat fills/plastic look | 5=some texture | 10=all surfaces have natural grain + response
+   Measure: texture variance per cluster, roughness class appropriate, SSS on organic
+
+4. EDGE INTEGRITY
+   1=obvious cutout/halo | 5=clean cut but hard edge | 10=natural blend with depth-of-field
+   Measure: halo pixel count, feather quality, no color fringe
+
+5. PHYSICAL CONSISTENCY
+   1=floating, no shadow | 5=shadow present, wrong softness | 10=AO + shadow + reflection
+   Measure: contact zone present, shadow matches light_direction and shadow_softness
+
+6. STYLE CONSISTENCY
+   1=obvious style mismatch (cartoon in photo) | 5=close but detectable | 10=indistinguishable
+   Measure: saturation mean delta, texture variance delta, edge density match
+
+7. SCALE PLAUSIBILITY
+   1=obviously wrong size | 5=plausible but off | 10=correct biological + perspective scale
+   Measure: subject height / scene reference = expected ratio from BIOLOGICAL_SCALES
+
+8. PIPELINE COMPLETENESS
+   1=fewer than 5 phases | 5=8 phases | 10=all 11 phases with vapor-idx throughout
+   Measure: count phase outputs in stats report; vapor stats present for all instances
+```
