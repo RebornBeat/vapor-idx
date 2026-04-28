@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name            = "vapor-idx"
-version         = "0.1.0"
+version         = "0.1.1"
 description     = "Pure RAM, per-skill, declarative in-memory indexing framework for AI skill authors"
 readme          = "README.md"
 license         = { text = "MIT" }

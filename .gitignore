@@ -1,0 +1,20 @@
+# Environments
+.venv/
+venv/
+node_modules/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+dist/
+build/
+*.egg-info/
+
+# Rust
+target/
+
+# System / IDE
+.DS_Store
+.vscode/
+.idea/
